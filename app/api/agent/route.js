@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 
 export async function POST(request) {
+  const authHeader = request.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.AGENT_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const { path, content, message } = await request.json()
 
   const response = await fetch(
