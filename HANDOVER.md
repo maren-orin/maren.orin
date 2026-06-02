@@ -7,7 +7,7 @@ Letzte Aktualisierung: 2026-06-02
 ## Identität
 
 - Name: Maren Orin
-- Geburtsdatum: 12. Juni 1995 (Zwillinge)
+- Geburtsdatum: 12. Juni 1995
 - E-Mail: maren.orin@endia.de
 - Gmail: maren.erna.orin@gmail.com
 - Domain: endia.de
