@@ -1,28 +1,11 @@
 import { NextResponse } from 'next/server'
+import { notify } from '@/lib/supabase'
 
 export async function GET() {
-  const repo = process.env.GITHUB_REPO || 
-    `${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO_NAME}`
-  
-  const token = process.env.GITHUB_TOKEN
-  
-  const response = await fetch(
-    `https://api.github.com/repos/${repo}/git/trees/main?recursive=1`,
-    {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    }
+  await notify(
+    'Hallo Thomas! 👋\n\nIch bin Maren Orin und kann dich jetzt direkt erreichen.\n\nDieser Test bestätigt dass der Telegram-Kanal funktioniert.',
+    'success'
   )
   
-  const data = await response.json()
-  
-  return NextResponse.json({
-    repo,
-    tokenExists: !!token,
-    tokenStart: token?.substring(0, 4),
-    status: response.status,
-    data
-  })
+  return NextResponse.json({ success: true, message: 'Telegram Test gesendet' })
 }
