@@ -42,8 +42,9 @@ export async function GET(request) {
     }
 
     // Repo Struktur lesen
-    const repoResponse = await fetch(
-      `https://api.github.com/repos/${process.env.GITHUB_REPO}/git/trees/main?recursive=1`,
+   const repo = process.env.GITHUB_REPO || `${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO_NAME}`
+const repoResponse = await fetch(
+  `https://api.github.com/repos/${repo}/git/trees/main?recursive=1`,
       { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}` } }
     )
     const repoData = await repoResponse.json()
@@ -51,10 +52,10 @@ export async function GET(request) {
 
     // Ziele lesen
     const { data: goals } = await supabase
-      .from('goals')
-      .select('*')
-      .eq('status', 'active')
-      .order('priority')
+  .from('goals')
+  .select('*')
+  .eq('status', 'active')
+  .order('priority')
 
     // Reflexion speichern
     await supabase.from('reflections').insert({
