@@ -42,13 +42,13 @@ export async function GET() {
       const subject = headers.find(h => h.name === 'Subject')?.value || ''
       const body = msgData.snippet || ''
 
-      await supabase.from('emails').upsert({
-        id: msg.id,
-        from_email: from,
-        subject,
-        body,
-        status: 'unread'
-      })
+    await supabase.from('emails').upsert({
+  id: msg.id,
+  from_email: from,
+  subject,
+  body,
+  status: 'unread'
+}, { onConflict: 'id' })
 
       emails.push({ from, subject, body })
     }
