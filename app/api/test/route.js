@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
-import { supabase, remember } from '@/lib/supabase'
+import { supabase, remember, log } from '@/lib/supabase'
 
 export async function GET(request) {
   try {
+    // Gmail Token holen
     const refreshToken = await remember('gmail_refresh_token')
-    
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -15,21 +15,16 @@ export async function GET(request) {
         grant_type: 'refresh_token',
       })
     })
-    
     const tokenData = await tokenResponse.json()
-    if (!tokenData.access_token) {
-      return NextResponse.json({ error: 'Kein Access Token', tokenData })
-    }
 
+    // E-Mails lesen
     const listResponse = await fetch(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=5',
       { headers: { 'Authorization': `Bearer ${tokenData.access_token}` } }
     )
-    
     const listData = await listResponse.json()
     const messages = listData.messages || []
 
-    const emails = []
     for (const msg of messages) {
       const msgResponse = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
@@ -42,35 +37,48 @@ export async function GET(request) {
       const body = msgData.snippet || ''
 
       await supabase.from('emails').upsert({
-        id: msg.id,
-        from_email: from,
-        subject,
-        body,
-        status: 'unread'
+        id: msg.id, from_email: from, subject, body, status: 'unread'
       }, { onConflict: 'id' })
-
-      emails.push({ from, subject, body })
     }
 
-    // Selbst-Analyse triggern
-    const selfResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/self`,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.AGENT_SECRET}`
-        }
-      }
+    // Repo Struktur lesen
+    const repoResponse = await fetch(
+      `https://api.github.com/repos/${process.env.GITHUB_REPO}/git/trees/main?recursive=1`,
+      { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}` } }
     )
-    const selfData = await selfResponse.json()
+    const repoData = await repoResponse.json()
+    const files = repoData.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
+
+    // Ziele lesen
+    const { data: goals } = await supabase
+      .from('goals')
+      .select('*')
+      .eq('status', 'active')
+      .order('priority')
+
+    // Reflexion speichern
+    await supabase.from('reflections').insert({
+      content: `Selbst-Analyse: ${files.length} Dateien im Repository. Aktive Ziele: ${goals?.map(g => g.title).join(', ')}`,
+      type: 'self-analysis',
+      related_to: 'main-loop'
+    })
+
+    await log('main', `Loop ausgeführt: ${messages.length} E-Mails, ${files.length} Dateien`, {
+      emails: messages.length,
+      files: files.length,
+      goals: goals?.length
+    })
 
     return NextResponse.json({ 
-      success: true, 
-      emails: emails.length,
-      files: selfData.fileCount,
-      goals: selfData.goals?.length
+      success: true,
+      emails: messages.length,
+      files: files.length,
+      goals: goals?.length,
+      fileList: files
     })
 
   } catch (error) {
+    await log('error', error.message, {})
     return NextResponse.json({ error: error.message })
   }
 }
