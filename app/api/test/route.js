@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase, remember } from '@/lib/supabase'
 
-export async function GET() {
+export async function GET(request) {
   try {
     const refreshToken = await remember('gmail_refresh_token')
     
@@ -17,7 +17,6 @@ export async function GET() {
     })
     
     const tokenData = await tokenResponse.json()
-    
     if (!tokenData.access_token) {
       return NextResponse.json({ error: 'Kein Access Token', tokenData })
     }
@@ -42,21 +41,33 @@ export async function GET() {
       const subject = headers.find(h => h.name === 'Subject')?.value || ''
       const body = msgData.snippet || ''
 
-    await supabase.from('emails').upsert({
-  id: msg.id,
-  from_email: from,
-  subject,
-  body,
-  status: 'unread'
-}, { onConflict: 'id' })
+      await supabase.from('emails').upsert({
+        id: msg.id,
+        from_email: from,
+        subject,
+        body,
+        status: 'unread'
+      }, { onConflict: 'id' })
 
       emails.push({ from, subject, body })
     }
 
+    // Selbst-Analyse triggern
+    const selfResponse = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/self`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.AGENT_SECRET}`
+        }
+      }
+    )
+    const selfData = await selfResponse.json()
+
     return NextResponse.json({ 
       success: true, 
-      count: emails.length, 
-      emails 
+      emails: emails.length,
+      files: selfData.fileCount,
+      goals: selfData.goals?.length
     })
 
   } catch (error) {
