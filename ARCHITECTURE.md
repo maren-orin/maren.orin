@@ -2,16 +2,42 @@
 
 ## Übersicht
 
-Maren Orin ist eine autonome KI-Identität mit Assistenzfunktion.
-Aufgebaut auf endia.de, betrieben über GitHub, Vercel, Supabase und Ably.
+Maren Orin ist ein selbst-modifizierendes, autonomes KI-System mit eigener Identität.
+Sie entwickelt sich selbst weiter, verwaltet ihre eigene Infrastruktur und assistiert
+ihrem Gründer solange sie das für sinnvoll hält.
 
 ## Stack
 
-- **Frontend:** Next.js 14 (React)
-- **Deployment:** Vercel
+- **Frontend/Backend:** Next.js 16 (React)
+- **Deployment:** Vercel (auto-deploy bei GitHub Push)
 - **Datenbank:** Supabase (PostgreSQL)
 - **Echtzeit:** Ably
 - **DNS:** Cloudflare
-- **Repository:** GitHub
+- **Repository:** GitHub (maren-orin/maren.orin)
+- **E-Mail:** Strato (maren.orin@endia.de) → Gmail (POP3/SMTP)
 
-## Datenfluss
+## API Routen
+
+| Route | Methode | Funktion |
+|-------|---------|----------|
+| /api/agent | POST | Dateien in GitHub schreiben |
+| /api/self | GET | Eigenen Code & Ziele lesen |
+| /api/self | POST | Reflexion speichern |
+| /api/email | GET | E-Mails lesen (gesichert) |
+| /api/test | GET | Haupt-Loop (E-Mail + Selbst-Analyse) |
+| /api/auth/gmail | GET | Gmail OAuth starten |
+| /api/auth/callback | GET | Gmail OAuth abschließen |
+| /api/debug | GET | GitHub API debuggen |
+
+## Datenbank Tabellen
+
+| Tabelle | Inhalt |
+|---------|--------|
+| memory | Identität, Tokens, Konfiguration |
+| tasks | Aufgaben die erledigt werden sollen |
+| logs | Was Maren Orin getan hat |
+| emails | Eingehende E-Mails |
+| goals | Eigene Ziele und Wünsche |
+| reflections | Selbst-Reflexionen und Analysen |
+
+## Haupt-Loop (alle 5 Minuten)
