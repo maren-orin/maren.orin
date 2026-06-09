@@ -1,8 +1,3 @@
-// rebuild: 2026-06-09
-/**
- * app/api/debug/route.js
-...
-
 /**
  * app/api/debug/route.js
  * Erstellt: 2026-06-06
@@ -14,14 +9,13 @@
  * Abhängigkeiten: lib/supabase.js
  */
 import { NextResponse } from 'next/server'
-import { notify, supabaseAdmin } from '@/lib/supabase'
+import { notify } from '@/lib/supabase'
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const test = searchParams.get('test')
   const secret = searchParams.get('secret')
 
-  // Authentifizierung – Agent Secret oder Cron Secret
   const authHeader = request.headers.get('authorization')
   const isAuthorized =
     authHeader === `Bearer ${process.env.AGENT_SECRET}` ||
@@ -31,15 +25,27 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Telegram Test
   if (test === 'telegram') {
-    await notify('✅ Telegram funktioniert!', 'success')
+    await notify('Telegram funktioniert!', 'success')
     return NextResponse.json({ success: true, test: 'telegram' })
   }
 
-  // KIRA Think Test
   if (test === 'think') {
     const response = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/think`,
       {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.AGENT_SECRET}`
+        }
+      }
+    )
+    const data = await response.json()
+    return NextResponse.json(data)
+  }
+
+  return NextResponse.json({
+    available: ['telegram', 'think'],
+    usage: '/api/debug?test=think&secret=YOUR_CRON_SECRET'
+  })
+}
