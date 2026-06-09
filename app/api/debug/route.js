@@ -44,6 +44,20 @@ export async function GET(request) {
     return NextResponse.json(data)
   }
 
+// Selbst-Modifikations Test – liest Erlaubtenliste
+  if (test === 'modify-status') {
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/modify`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.AGENT_SECRET}`
+        }
+      }
+    )
+    const data = await response.json()
+    return NextResponse.json(data)
+  }
+  
   return NextResponse.json({
     available: ['telegram', 'think'],
     usage: '/api/debug?test=think&secret=YOUR_CRON_SECRET'
