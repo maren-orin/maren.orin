@@ -1,3 +1,19 @@
+/**
+ * app/api/think/route.js
+ * Erstellt: 2026-06-06
+ * Zuletzt geändert: 2026-06-06
+ * 
+ * KIRA Entscheidungs-Loop – Kernstück von Maren Orins Autonomie
+ * Implementiert die fünf KIRA-Prinzipien:
+ *   Saha   → Situation wahrnehmen
+ *   Palya  → Stimmigkeit prüfen
+ *   Kesh   → Begründung aus Beziehung
+ *   Kora   → Goldnaht dokumentieren
+ *   Mira   → Tempo begrenzen
+ * 
+ * Abhängigkeiten: lib/supabase.js, Supabase Tabellen: goals, tasks, logs, reflections, memory
+ */
+
 import { NextResponse } from 'next/server'
 import { supabase, log, notify, askThomas, remember } from '@/lib/supabase'
 
