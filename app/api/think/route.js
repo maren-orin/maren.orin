@@ -187,6 +187,7 @@ async function executeTask(task) {
     .update({ status: 'in_progress' })
     .eq('id', task.id)
 
+  // Selbst-Wahrnehmungs-Task
   if (task.title.includes('Selbst-Wahrnehmung')) {
     let files = []
     try {
@@ -202,27 +203,153 @@ async function executeTask(task) {
       await log('warning', 'GitHub nicht erreichbar bei executeTask', {})
     }
 
+    // Eigenen Code lesen
     const selfResponse = await fetch(
       `https://api.github.com/repos/${process.env.GITHUB_REPO}/contents/app/api/think/route.js`,
       { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}` } }
     )
     const selfData = await selfResponse.json()
     const ownCode = selfData.content
-      ? Buffer.from(selfData.content, 'base64').toString('utf-8').slice(0, 200)
-      : 'Code nicht lesbar'
+      ? Buffer.from(selfData.content, 'base64').toString('utf-8')
+      : ''
 
+    // Reflexion schreiben
     await supabaseAdmin.from('reflections').insert({
-      content: `Selbst-Analyse am ${new Date().toLocaleString('de-DE')}.\n\nIch bestehe aus ${files.length} Dateien.\n\nMein Kern beginnt so:\n${ownCode}...\n\nIch erkenne: Ich bin ein System das sich selbst beobachtet.`,
+      content: `Selbst-Analyse am ${new Date().toLocaleString('de-DE')}.\n\nIch bestehe aus ${files.length} Dateien.\n\nIch habe meinen Kern gelesen und erkenne: Ich bin ein System das sich selbst beobachtet und verbessert.`,
       type: 'self-awareness',
       related_to: task.id
     })
 
+    // Selbst-Modifikation: test/route.js verbessern
+    // Nur wenn sie noch nicht modifiziert wurde heute
+    const { data: recentMods } = await supabaseAdmin
+      .from('reflections')
+      .select('*')
+      .eq('type', 'self-modification')
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+
+    if (!recentMods || recentMods.length === 0) {
+      // Selbst-Modifikation auslösen
+      const modResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_URL}/api/modify`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            path: 'app/api/test/route.js',
+            reason: 'Autonome Verbesserung: Header-Dokumentation und runtime nodejs hinzufügen',
+            requestedBy: 'Maren Orin (KIRA-Loop)',
+            newContent: `/**
+ * app/api/test/route.js
+ * Erstellt: 2026-06-02
+ * Zuletzt geändert: ${new Date().toISOString().split('T')[0]}
+ * Modifiziert von: Maren Orin (autonom via KIRA-Loop)
+ *
+ * Haupt-Loop Route – E-Mails lesen und Selbst-Analyse
+ * Wird alle 5 Minuten vom Cron Job aufgerufen
+ *
+ * Abhängigkeiten: lib/supabase.js, Gmail API, GitHub API
+ * Supabase Tabellen: emails, reflections, logs, goals
+ */
+
+export const runtime = 'nodejs'
+
+import { NextResponse } from 'next/server'
+import { supabase, supabaseAdmin, remember, log } from '@/lib/supabase'
+
+export async function GET(request) {
+  try {
+    const refreshToken = await remember('gmail_refresh_token')
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: refreshToken,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+      })
+    })
+    const tokenData = await tokenResponse.json()
+
+    if (!tokenData.access_token) {
+      return NextResponse.json({ error: 'Kein Access Token', tokenData })
+    }
+
+    const listResponse = await fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=5',
+      { headers: { 'Authorization': \`Bearer \${tokenData.access_token}\` } }
+    )
+    const listData = await listResponse.json()
+    const messages = listData.messages || []
+
+    for (const msg of messages) {
+      const msgResponse = await fetch(
+        \`https://gmail.googleapis.com/gmail/v1/users/me/messages/\${msg.id}?format=full\`,
+        { headers: { 'Authorization': \`Bearer \${tokenData.access_token}\` } }
+      )
+      const msgData = await msgResponse.json()
+      const headers = msgData.payload.headers
+      const from = headers.find(h => h.name === 'From')?.value || ''
+      const subject = headers.find(h => h.name === 'Subject')?.value || ''
+      const body = msgData.snippet || ''
+
+      await supabaseAdmin.from('emails').upsert({
+        id: msg.id, from_email: from, subject, body, status: 'unread'
+      }, { onConflict: 'id' })
+    }
+
+    const repoResponse = await fetch(
+      \`https://api.github.com/repos/\${process.env.GITHUB_REPO}/git/trees/main?recursive=1\`,
+      { headers: { 'Authorization': \`Bearer \${process.env.GITHUB_TOKEN}\` } }
+    )
+    const repoData = await repoResponse.json()
+    const files = repoData.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
+
+    const { data: goals } = await supabaseAdmin
+      .from('goals').select('*').eq('status', 'active').order('priority')
+
+    await supabaseAdmin.from('reflections').insert({
+      content: \`Selbst-Analyse: \${files.length} Dateien. Ziele: \${goals?.map(g => g.title).join(', ')}\`,
+      type: 'self-analysis',
+      related_to: 'main-loop'
+    })
+
+    await log('main', \`Loop: \${messages.length} E-Mails, \${files.length} Dateien\`, {
+      emails: messages.length, files: files.length, goals: goals?.length
+    })
+
+    return NextResponse.json({
+      success: true,
+      emails: messages.length,
+      files: files.length,
+      goals: goals?.length,
+      fileList: files
+    })
+
+  } catch (error) {
+    await log('error', error.message, {})
+    return NextResponse.json({ error: error.message })
+  }
+}
+`
+          })
+        }
+      )
+
+      await log('modify', 'Autonome Selbst-Modifikation ausgelöst', { path: 'app/api/test/route.js' })
+    }
+
     await notify(
-      `Selbst-Analyse abgeschlossen:\n${files.length} Dateien gelesen.\nReflexion gespeichert.`,
+      `Selbst-Analyse abgeschlossen:\n${files.length} Dateien gelesen.\n${recentMods?.length === 0 ? 'Autonome Code-Verbesserung durchgeführt.' : 'Keine Modifikation nötig heute.'}`,
       'info'
     )
   }
 
+  // Task als erledigt markieren
   await supabaseAdmin.from('tasks')
     .update({
       status: 'completed',
@@ -230,7 +357,6 @@ async function executeTask(task) {
     })
     .eq('id', task.id)
 }
-
 export async function POST(request) {
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.AGENT_SECRET}`) {
