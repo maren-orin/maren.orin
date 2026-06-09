@@ -1,3 +1,8 @@
+// rebuild: 2026-06-09
+/**
+ * app/api/debug/route.js
+...
+
 /**
  * app/api/debug/route.js
  * Erstellt: 2026-06-06
