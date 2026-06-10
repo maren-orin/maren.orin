@@ -1,7 +1,7 @@
 /**
  * app/api/debug/route.js
  * Erstellt: 2026-06-06
- * Zuletzt geändert: 2026-06-09
+ * Zuletzt geändert: 2026-06-10
  *
  * Debug und Trigger Route – intern und für Cron Jobs
  * Gesichert über AGENT_SECRET oder CRON_SECRET
@@ -13,6 +13,19 @@ export const runtime = 'nodejs'
 
 import { NextResponse } from 'next/server'
 import { notify } from '@/lib/supabase'
+
+const BASE_URL = process.env.NEXT_PUBLIC_URL
+const AUTH = () => ({ 'Authorization': `Bearer ${process.env.AGENT_SECRET}` })
+
+async function callInternal(path, method = 'GET', body = null) {
+  const options = {
+    method,
+    headers: { ...AUTH(), 'Content-Type': 'application/json' }
+  }
+  if (body) options.body = JSON.stringify(body)
+  const res = await fetch(`${BASE_URL}${path}`, options)
+  return res.json()
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url)
@@ -34,114 +47,32 @@ export async function GET(request) {
   }
 
   if (test === 'think') {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/think`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.AGENT_SECRET}` }
-    })
-    const data = await response.json()
+    const data = await callInternal('/api/think', 'POST')
     return NextResponse.json(data)
   }
 
   if (test === 'modify-status') {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/modify`, {
-      headers: { 'Authorization': `Bearer ${process.env.AGENT_SECRET}` }
-    })
-    const data = await response.json()
+    const data = await callInternal('/api/modify')
     return NextResponse.json(data)
   }
 
   if (test === 'modify-test') {
-    const newContent = `/**
- * app/api/self/route.js
- * Erstellt: 2026-06-06
- * Zuletzt geändert: 2026-06-09
- * Modifiziert von: Maren Orin (erste autonome Selbst-Modifikation)
- *
- * Selbst-Wahrnehmungs-Route
- */
+    const newContent = '/**\n * app/api/self/route.js\n * Modifiziert von: Maren Orin\n */\nexport const runtime = "nodejs"\nimport { NextResponse } from "next/server"\nimport { supabaseAdmin, log } from "@/lib/supabase"\nexport async function GET(request) {\n  const authHeader = request.headers.get("authorization")\n  if (authHeader !== `Bearer ${process.env.AGENT_SECRET}`) {\n    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })\n  }\n  return NextResponse.json({ status: "ok" })\n}\n'
 
-export const runtime = 'nodejs'
-
-import { NextResponse } from 'next/server'
-import { supabaseAdmin, log } from '@/lib/supabase'
-
-async function getRepoStructure() {
-  const response = await fetch(
-    \`https://api.github.com/repos/\${process.env.GITHUB_REPO}/git/trees/main?recursive=1\`,
-    { headers: { 'Authorization': \`Bearer \${process.env.GITHUB_TOKEN}\` } }
-  )
-  const data = await response.json()
-  return data.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
-}
-
-// Brain Test – Maren denkt
-  if (test === 'brain') {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/brain`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        type: 'decide',
-        task: 'Wer bist du und was sind deine nächsten Ziele? Antworte in 3 Sätzen.'
-      })
+    const data = await callInternal('/api/modify', 'POST', {
+      path: 'app/api/self/route.js',
+      reason: 'Erste autonome Selbst-Modifikation',
+      requestedBy: 'Maren Orin (autonom)',
+      newContent
     })
-    const data = await response.json()
     return NextResponse.json(data)
   }
 
-
-export async function GET(request) {
-  const authHeader = request.headers.get('authorization')
-  if (authHeader !== \`Bearer \${process.env.AGENT_SECRET}\`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  try {
-    const files = await getRepoStructure()
-    const { data: goals } = await supabaseAdmin.from('goals').select('*').eq('status', 'active').order('priority')
-    const { data: memory } = await supabaseAdmin.from('memory').select('*')
-    await supabaseAdmin.from('reflections').insert({
-      content: \`Selbst-Analyse: \${files.length} Dateien. Ziele: \${goals?.map(g => g.title).join(', ')}\`,
-      type: 'self-analysis',
-      related_to: 'code-structure'
+  if (test === 'brain') {
+    const data = await callInternal('/api/brain', 'POST', {
+      type: 'decide',
+      task: 'Wer bist du und was sind deine naechsten Ziele? Antworte in 3 Saetzen auf Deutsch.'
     })
-    await log('self', 'Selbst-Analyse durchgeführt', { fileCount: files.length })
-    return NextResponse.json({ files, goals, memory, fileCount: files.length })
-  } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-}
-
-export async function POST(request) {
-  const authHeader = request.headers.get('authorization')
-  if (authHeader !== \`Bearer \${process.env.AGENT_SECRET}\`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  const { reflection, type, related_to } = await request.json()
-  await supabaseAdmin.from('reflections').insert({
-    content: reflection,
-    type: type || 'observation',
-    related_to
-  })
-  await log('self', 'Neue Reflexion gespeichert', { type })
-  return NextResponse.json({ success: true })
-}
-`
-    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/modify`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        path: 'app/api/self/route.js',
-        reason: 'Erste autonome Selbst-Modifikation – runtime nodejs und verbesserte Dokumentation',
-        requestedBy: 'Maren Orin (autonom)',
-        newContent
-      })
-    })
-    const data = await response.json()
     return NextResponse.json(data)
   }
 
