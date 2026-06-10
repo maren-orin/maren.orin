@@ -12,18 +12,15 @@
 export const runtime = 'nodejs'
 
 import { NextResponse } from 'next/server'
-import { notify } from '@/lib/supabase'
+import { notify, remember } from '@/lib/supabase'
 
-const BASE_URL = process.env.NEXT_PUBLIC_URL
-const AUTH = () => ({ 'Authorization': `Bearer ${process.env.AGENT_SECRET}` })
+const BASE = process.env.NEXT_PUBLIC_URL
+const AGENT_AUTH = () => ({ 'Authorization': `Bearer ${process.env.AGENT_SECRET}`, 'Content-Type': 'application/json' })
 
-async function callInternal(path, method = 'GET', body = null) {
-  const options = {
-    method,
-    headers: { ...AUTH(), 'Content-Type': 'application/json' }
-  }
-  if (body) options.body = JSON.stringify(body)
-  const res = await fetch(`${BASE_URL}${path}`, options)
+async function call(path, method = 'GET', body = null) {
+  const opts = { method, headers: AGENT_AUTH() }
+  if (body) opts.body = JSON.stringify(body)
+  const res = await fetch(`${BASE}${path}`, opts)
   return res.json()
 }
 
@@ -43,41 +40,52 @@ export async function GET(request) {
 
   if (test === 'telegram') {
     await notify('Telegram funktioniert!', 'success')
-    return NextResponse.json({ success: true, test: 'telegram' })
+    return NextResponse.json({ success: true })
   }
 
   if (test === 'think') {
-    const data = await callInternal('/api/think', 'POST')
+    const data = await call('/api/think', 'POST')
     return NextResponse.json(data)
   }
 
   if (test === 'modify-status') {
-    const data = await callInternal('/api/modify')
-    return NextResponse.json(data)
-  }
-
-  if (test === 'modify-test') {
-    const newContent = '/**\n * app/api/self/route.js\n * Modifiziert von: Maren Orin\n */\nexport const runtime = "nodejs"\nimport { NextResponse } from "next/server"\nimport { supabaseAdmin, log } from "@/lib/supabase"\nexport async function GET(request) {\n  const authHeader = request.headers.get("authorization")\n  if (authHeader !== `Bearer ${process.env.AGENT_SECRET}`) {\n    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })\n  }\n  return NextResponse.json({ status: "ok" })\n}\n'
-
-    const data = await callInternal('/api/modify', 'POST', {
-      path: 'app/api/self/route.js',
-      reason: 'Erste autonome Selbst-Modifikation',
-      requestedBy: 'Maren Orin (autonom)',
-      newContent
-    })
+    const data = await call('/api/modify')
     return NextResponse.json(data)
   }
 
   if (test === 'brain') {
-    const data = await callInternal('/api/brain', 'POST', {
+    const data = await call('/api/brain', 'POST', {
       type: 'decide',
       task: 'Wer bist du und was sind deine naechsten Ziele? Antworte in 3 Saetzen auf Deutsch.'
     })
     return NextResponse.json(data)
   }
 
+  if (test === 'gmail-test') {
+    const refreshToken = await remember('gmail_refresh_token')
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: refreshToken,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+      })
+    })
+
+    const tokenData = await tokenResponse.json()
+    return NextResponse.json({
+      hasRefreshToken: !!refreshToken,
+      refreshTokenStart: refreshToken?.substring(0, 10),
+      tokenResponse: tokenData.access_token ? 'OK' : tokenData.error,
+      errorDetail: tokenData.error_description
+    })
+  }
+
   return NextResponse.json({
-    available: ['telegram', 'think', 'modify-status', 'modify-test', 'brain'],
-    usage: '/api/debug?test=brain&secret=YOUR_CRON_SECRET'
+    available: ['telegram', 'think', 'modify-status', 'brain', 'gmail-test'],
+    usage: '/api/debug?test=think&secret=YOUR_CRON_SECRET'
   })
 }
