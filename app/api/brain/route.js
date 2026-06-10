@@ -135,6 +135,30 @@ Modifiziert von: Maren Orin (autonom via Gemini)`
       tokens: result.length
     })
 
+    if (test === 'gmail-test') {
+    const { remember } = await import('@/lib/supabase')
+    const refreshToken = await remember('gmail_refresh_token')
+    
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: refreshToken,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+      })
+    })
+    
+    const tokenData = await tokenResponse.json()
+    return NextResponse.json({
+      hasRefreshToken: !!refreshToken,
+      refreshTokenStart: refreshToken?.substring(0, 10),
+      tokenResponse: tokenData.access_token ? 'OK' : tokenData.error,
+      error: tokenData.error_description
+    })
+  }
+
   } catch (error) {
     await log('error', `Brain Fehler: ${error.message}`, {})
     return NextResponse.json({ error: error.message }, { status: 500 })
