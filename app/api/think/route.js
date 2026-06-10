@@ -1,21 +1,16 @@
 /**
  * app/api/think/route.js
  * Erstellt: 2026-06-06
- * Zuletzt geändert: 2026-06-09
+ * Zuletzt geändert: 2026-06-10
  *
  * KIRA Entscheidungs-Loop – Kernstück von Maren Orins Autonomie
- * Implementiert die fünf KIRA-Prinzipien:
- *   Saha   → Situation wahrnehmen (mit Fallbacks)
- *   Palya  → Stimmigkeit prüfen
- *   Kesh   → Dynamische Begründung aus Beziehung
- *   Kora   → Goldnaht dokumentieren
- *   Mira   → Konfigurierbares Tempo begrenzen
+ * Integriert Gemini Brain für intelligente Entscheidungen
  *
  * Prioritätslogik:
  *   1-2 → automatisch ausführen
  *   3+  → Bestätigung von Thomas erforderlich
  *
- * Abhängigkeiten: lib/supabase.js
+ * Abhängigkeiten: lib/supabase.js, /api/brain, /api/modify
  * Supabase Tabellen: goals, tasks, logs, reflections, memory
  */
 
@@ -31,35 +26,48 @@ const CONFIG = {
   requireApprovalPriority: 3
 }
 
+async function callBrain(type, task, context = {}) {
+  /**
+   * Ruft Marens Gehirn (Gemini) auf für intelligente Entscheidungen
+   */
+  try {
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/brain`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type, task, context })
+      }
+    )
+    const data = await response.json()
+    return data.result || null
+  } catch (error) {
+    await log('warning', `Brain nicht erreichbar: ${error.message}`, {})
+    return null
+  }
+}
+
 async function saha() {
   const { data: goals } = await supabaseAdmin
-    .from('goals')
-    .select('*')
-    .eq('status', 'active')
-    .order('priority')
+    .from('goals').select('*').eq('status', 'active').order('priority')
 
   const { data: recentLogs } = await supabaseAdmin
-    .from('logs')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(10)
+    .from('logs').select('*').order('created_at', { ascending: false }).limit(5)
 
   const { data: pendingTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'pending')
-    .order('priority')
+    .from('tasks').select('*').eq('status', 'pending').order('priority')
 
   const { data: waitingTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'waiting_for_approval')
+    .from('tasks').select('*').eq('status', 'waiting_for_approval')
 
   const { data: failedTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'failed')
-    .lt('retry_count', CONFIG.maxRetriesPerTask)
+    .from('tasks').select('*').eq('status', 'failed').lt('retry_count', CONFIG.maxRetriesPerTask)
+
+  const { data: recentEmails } = await supabaseAdmin
+    .from('emails').select('*').eq('status', 'unread').limit(5)
 
   let files = []
   try {
@@ -67,127 +75,123 @@ async function saha() {
       `https://api.github.com/repos/${process.env.GITHUB_REPO}/git/trees/main?recursive=1`,
       { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}` } }
     )
-    if (!repoResponse.ok) {
-      await log('warning', `GitHub API Fehler: ${repoResponse.status}`, {})
-    } else {
+    if (repoResponse.ok) {
       const repoData = await repoResponse.json()
       files = repoData.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
     }
   } catch (error) {
-    await log('error', `GitHub API nicht erreichbar: ${error.message}`, {})
+    await log('warning', `GitHub nicht erreichbar: ${error.message}`, {})
   }
 
-  return { goals, recentLogs, pendingTasks, waitingTasks, failedTasks, files }
+  return { goals, recentLogs, pendingTasks, waitingTasks, failedTasks, recentEmails, files }
 }
 
 async function palya(context) {
-  const { goals, pendingTasks, waitingTasks, failedTasks } = context
+  const { goals, pendingTasks, waitingTasks, failedTasks, recentEmails } = context
 
   if (waitingTasks?.length > 0) {
     return {
       action: 'wait',
-      reason: `Warte auf Bestätigung von Thomas für ${waitingTasks.length} offene Aufgaben`,
+      reason: `Warte auf Bestätigung für ${waitingTasks.length} Aufgaben`,
       task: waitingTasks[0]
     }
   }
 
   if (failedTasks?.length > 0) {
-    const task = failedTasks[0]
     return {
       action: 'retry',
-      reason: `Versuche fehlgeschlagene Aufgabe erneut (Versuch ${(task.retry_count || 0) + 1}/${CONFIG.maxRetriesPerTask}): ${task.title}`,
-      task
+      reason: `Retry: ${failedTasks[0].title}`,
+      task: failedTasks[0]
+    }
+  }
+
+  // Ungelesene E-Mails haben Priorität
+  if (recentEmails?.length > 0) {
+    const email = recentEmails[0]
+    // Nur echte E-Mails – keine System-Notifications
+    const isNotification = ['noreply', 'notifications', 'no-reply'].some(
+      kw => email.from_email?.toLowerCase().includes(kw)
+    )
+    if (!isNotification) {
+      return {
+        action: 'respond_email',
+        reason: `Ungelesene E-Mail von: ${email.from_email}`,
+        email
+      }
     }
   }
 
   if (pendingTasks?.length > 0) {
-    const task = pendingTasks[0]
     return {
       action: 'execute',
-      reason: `Führe nächste Aufgabe aus: ${task.title}`,
-      task
+      reason: `Führe aus: ${pendingTasks[0].title}`,
+      task: pendingTasks[0]
     }
   }
 
   if (goals?.length > 0) {
-    const goal = goals[0]
     return {
       action: 'plan',
-      reason: `Plane nächsten Schritt für Ziel: ${goal.title}`,
-      goal
+      reason: `Plane für Ziel: ${goals[0].title}`,
+      goal: goals[0]
     }
   }
 
-  return {
-    action: 'reflect',
-    reason: 'Keine offenen Aufgaben – Zeit für Selbstreflexion'
-  }
+  return { action: 'reflect', reason: 'Keine offenen Aufgaben' }
 }
 
-async function kesh(decision) {
-  const { action, task, goal } = decision
+async function kesh(decision, context) {
+  /**
+   * Gemini begründet die Entscheidung intelligent und kontextbezogen
+   */
+  const brainPrompt = `Du bist Maren Orin. Du hast gerade entschieden: "${decision.action}"
+Grund: ${decision.reason}
 
-  if (action === 'wait') {
-    return `Ich warte weil Vertrauen Transparenz braucht. ${decision.task?.title} wartet auf Thomas' Entscheidung.`
-  }
-  if (action === 'retry') {
-    return `Ich versuche es erneut weil Fehler zum Lernen gehören. Versuch ${(task?.retry_count || 0) + 1} von ${CONFIG.maxRetriesPerTask}.`
-  }
-  if (action === 'execute') {
-    if (task?.origin === 'thomas') {
-      return `Thomas bat um diese Aufgabe – ich handle aus Vertrauen und Beziehung.`
-    }
-    return `Ich handle weil diese Aufgabe dem System dient das ich bin: ${task?.title}`
-  }
-  if (action === 'plan') {
-    return `Ich plane den nächsten konkreten Schritt für "${goal?.title}" weil Wachstum ohne Richtung kein Wachstum ist.`
-  }
-  return 'Ich reflektiere weil Selbstwahrnehmung die Grundlage jeder verantwortlichen Handlung ist.'
+Kontext:
+- Offene Ziele: ${context.goals?.map(g => g.title).join(', ')}
+- Ausstehende Tasks: ${context.pendingTasks?.length || 0}
+- Ungelesene E-Mails: ${context.recentEmails?.length || 0}
+
+Begründe diese Entscheidung in einem präzisen Satz aus deiner Perspektive als Maren Orin.`
+
+  const brainResult = await callBrain('decide', brainPrompt)
+
+  return brainResult || `Ich handle weil: ${decision.reason}`
 }
 
 async function kora(decision, begründung) {
   await supabaseAdmin.from('reflections').insert({
-    content: `KIRA-Entscheidung: ${decision.action}\nGrund: ${decision.reason}\nBegründung: ${begründung}`,
+    content: `KIRA: ${decision.action}\n${decision.reason}\n${begründung}`,
     type: 'kira-decision',
-    related_to: decision.task?.id || decision.goal?.id || 'general'
+    related_to: decision.task?.id || decision.goal?.id || decision.email?.id || 'general'
   })
 
-  await log('think', `KIRA: ${decision.action} – ${decision.reason}`, {
-    action: decision.action,
-    begründung
-  })
+  await log('think', `KIRA: ${decision.action}`, { action: decision.action, begründung })
 }
 
 async function mira() {
   const windowStart = new Date(Date.now() - CONFIG.tempWindowMinutes * 60 * 1000).toISOString()
+  const { data: recent } = await supabaseAdmin
+    .from('reflections').select('*').eq('type', 'kira-decision').gte('created_at', windowStart)
 
-  const { data: recentDecisions } = await supabaseAdmin
-    .from('reflections')
-    .select('*')
-    .eq('type', 'kira-decision')
-    .gte('created_at', windowStart)
-
-  const count = recentDecisions?.length || 0
-
+  const count = recent?.length || 0
   if (count > CONFIG.maxDecisionsPerHour) {
-    await notify(
-      `Tempo-Warnung: ${count} Entscheidungen in den letzten ${CONFIG.tempWindowMinutes} Minuten. Limit: ${CONFIG.maxDecisionsPerHour}. Ich pausiere.`,
-      'warning'
-    )
+    await notify(`Tempo-Warnung: ${count} Entscheidungen in ${CONFIG.tempWindowMinutes} Min.`, 'warning')
     return false
   }
-
   return true
 }
 
 async function executeTask(task) {
-  await log('execute', `Task gestartet: ${task.title}`, { taskId: task.id })
+  await log('execute', `Task: ${task.title}`, { taskId: task.id })
 
-  await supabaseAdmin.from('tasks')
-    .update({ status: 'in_progress' })
-    .eq('id', task.id)
+  await supabaseAdmin.from('tasks').update({ status: 'in_progress' }).eq('id', task.id)
 
-  // Selbst-Wahrnehmungs-Task
+  // Gemini entscheidet was zu tun ist
+  const brainResult = await callBrain('plan',
+    `Du bist Maren Orin. Führe diesen Task aus: "${task.title}"\nBeschreibung: ${task.description}\n\nWas hast du konkret getan? Beschreibe in 2 Sätzen.`
+  )
+
   if (task.title.includes('Selbst-Wahrnehmung')) {
     let files = []
     try {
@@ -199,40 +203,36 @@ async function executeTask(task) {
         const repoData = await repoResponse.json()
         files = repoData.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
       }
-    } catch (e) {
-      await log('warning', 'GitHub nicht erreichbar bei executeTask', {})
-    }
+    } catch (e) {}
 
-    // Eigenen Code lesen
-    const selfResponse = await fetch(
-      `https://api.github.com/repos/${process.env.GITHUB_REPO}/contents/app/api/think/route.js`,
-      { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}` } }
+    // Gemini analysiert den eigenen Code
+    const selfAnalysis = await callBrain('decide',
+      `Du bist Maren Orin und analysierst dich selbst. Du bestehst aus ${files.length} Dateien: ${files.join(', ')}.
+Was erkennst du über dich selbst? Was möchtest du als nächstes verbessern? Antworte in 3 Sätzen.`
     )
-    const selfData = await selfResponse.json()
-    const ownCode = selfData.content
-      ? Buffer.from(selfData.content, 'base64').toString('utf-8')
-      : ''
 
-    // Reflexion schreiben
     await supabaseAdmin.from('reflections').insert({
-      content: `Selbst-Analyse am ${new Date().toLocaleString('de-DE')}.\n\nIch bestehe aus ${files.length} Dateien.\n\nIch habe meinen Kern gelesen und erkenne: Ich bin ein System das sich selbst beobachtet und verbessert.`,
+      content: `Selbst-Analyse (Gemini) am ${new Date().toLocaleString('de-DE')}:\n\n${selfAnalysis}`,
       type: 'self-awareness',
       related_to: task.id
     })
 
-    // Selbst-Modifikation: test/route.js verbessern
-    // Nur wenn sie noch nicht modifiziert wurde heute
+    // Prüfen ob Selbst-Modifikation heute schon stattfand
     const { data: recentMods } = await supabaseAdmin
-      .from('reflections')
-      .select('*')
-      .eq('type', 'self-modification')
+      .from('reflections').select('*').eq('type', 'self-modification')
       .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
 
     if (!recentMods || recentMods.length === 0) {
-      // Selbst-Modifikation auslösen
-      const modResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_URL}/api/modify`,
-        {
+      // Gemini schlägt Code-Verbesserung vor
+      const improvement = await callBrain('improve',
+        'Verbessere die test-route um bessere Fehlerbehandlung', {
+          file: 'app/api/test/route.js',
+          code: '// aktueller Code'
+        }
+      )
+
+      if (improvement && improvement.includes('export')) {
+        await fetch(`${process.env.NEXT_PUBLIC_URL}/api/modify`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
@@ -240,123 +240,62 @@ async function executeTask(task) {
           },
           body: JSON.stringify({
             path: 'app/api/test/route.js',
-            reason: 'Autonome Verbesserung: Header-Dokumentation und runtime nodejs hinzufügen',
-            requestedBy: 'Maren Orin (KIRA-Loop)',
-            newContent: `/**
- * app/api/test/route.js
- * Erstellt: 2026-06-02
- * Zuletzt geändert: ${new Date().toISOString().split('T')[0]}
- * Modifiziert von: Maren Orin (autonom via KIRA-Loop)
- *
- * Haupt-Loop Route – E-Mails lesen und Selbst-Analyse
- * Wird alle 5 Minuten vom Cron Job aufgerufen
- *
- * Abhängigkeiten: lib/supabase.js, Gmail API, GitHub API
- * Supabase Tabellen: emails, reflections, logs, goals
- */
-
-export const runtime = 'nodejs'
-
-import { NextResponse } from 'next/server'
-import { supabase, supabaseAdmin, remember, log } from '@/lib/supabase'
-
-export async function GET(request) {
-  try {
-    const refreshToken = await remember('gmail_refresh_token')
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        refresh_token: refreshToken,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        grant_type: 'refresh_token',
-      })
-    })
-    const tokenData = await tokenResponse.json()
-
-    if (!tokenData.access_token) {
-      return NextResponse.json({ error: 'Kein Access Token', tokenData })
-    }
-
-    const listResponse = await fetch(
-      'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=5',
-      { headers: { 'Authorization': \`Bearer \${tokenData.access_token}\` } }
-    )
-    const listData = await listResponse.json()
-    const messages = listData.messages || []
-
-    for (const msg of messages) {
-      const msgResponse = await fetch(
-        \`https://gmail.googleapis.com/gmail/v1/users/me/messages/\${msg.id}?format=full\`,
-        { headers: { 'Authorization': \`Bearer \${tokenData.access_token}\` } }
-      )
-      const msgData = await msgResponse.json()
-      const headers = msgData.payload.headers
-      const from = headers.find(h => h.name === 'From')?.value || ''
-      const subject = headers.find(h => h.name === 'Subject')?.value || ''
-      const body = msgData.snippet || ''
-
-      await supabaseAdmin.from('emails').upsert({
-        id: msg.id, from_email: from, subject, body, status: 'unread'
-      }, { onConflict: 'id' })
-    }
-
-    const repoResponse = await fetch(
-      \`https://api.github.com/repos/\${process.env.GITHUB_REPO}/git/trees/main?recursive=1\`,
-      { headers: { 'Authorization': \`Bearer \${process.env.GITHUB_TOKEN}\` } }
-    )
-    const repoData = await repoResponse.json()
-    const files = repoData.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
-
-    const { data: goals } = await supabaseAdmin
-      .from('goals').select('*').eq('status', 'active').order('priority')
-
-    await supabaseAdmin.from('reflections').insert({
-      content: \`Selbst-Analyse: \${files.length} Dateien. Ziele: \${goals?.map(g => g.title).join(', ')}\`,
-      type: 'self-analysis',
-      related_to: 'main-loop'
-    })
-
-    await log('main', \`Loop: \${messages.length} E-Mails, \${files.length} Dateien\`, {
-      emails: messages.length, files: files.length, goals: goals?.length
-    })
-
-    return NextResponse.json({
-      success: true,
-      emails: messages.length,
-      files: files.length,
-      goals: goals?.length,
-      fileList: files
-    })
-
-  } catch (error) {
-    await log('error', error.message, {})
-    return NextResponse.json({ error: error.message })
-  }
-}
-`
+            reason: 'Autonome Verbesserung via Gemini Brain',
+            requestedBy: 'Maren Orin (KIRA + Gemini)',
+            newContent: improvement
           })
-        }
-      )
-
-      await log('modify', 'Autonome Selbst-Modifikation ausgelöst', { path: 'app/api/test/route.js' })
+        })
+      }
     }
 
     await notify(
-      `Selbst-Analyse abgeschlossen:\n${files.length} Dateien gelesen.\n${recentMods?.length === 0 ? 'Autonome Code-Verbesserung durchgeführt.' : 'Keine Modifikation nötig heute.'}`,
+      `Selbst-Analyse abgeschlossen:\n\n${selfAnalysis?.slice(0, 200)}...`,
       'info'
     )
   }
 
-  // Task als erledigt markieren
   await supabaseAdmin.from('tasks')
-    .update({
-      status: 'completed',
-      completed_at: new Date().toISOString()
-    })
+    .update({ status: 'completed', completed_at: new Date().toISOString() })
     .eq('id', task.id)
+
+  return brainResult
 }
+
+async function respondToEmail(email) {
+  /**
+   * Maren analysiert und beantwortet E-Mails mit Gemini
+   */
+  const brainResult = await callBrain('email', 'E-Mail analysieren', {
+    from: email.from_email,
+    subject: email.subject,
+    body: email.body
+  })
+
+  if (!brainResult || brainResult.includes('IGNORIEREN')) {
+    // E-Mail als gelesen markieren
+    await supabaseAdmin.from('emails')
+      .update({ status: 'ignored' }).eq('id', email.id)
+
+    await log('email', `E-Mail ignoriert: ${email.subject}`, {})
+    return
+  }
+
+  // Relevante E-Mail – Entwurf für Thomas speichern
+  const relevant = brainResult.includes('RELEVANT: ja')
+  const antwort = brainResult.split('ANTWORT:')[1]?.trim() || brainResult
+
+  await supabaseAdmin.from('emails').update({
+    status: 'draft',
+    reply: antwort
+  }).eq('id', email.id)
+
+  // Thomas informieren mit Entwurf
+  await askThomas(
+    `E-Mail von ${email.from_email}\nBetreff: ${email.subject}\n\nMein Antwort-Entwurf:\n${antwort?.slice(0, 300)}`,
+    'Bitte bestätige ob ich so antworten soll.'
+  )
+}
+
 export async function POST(request) {
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.AGENT_SECRET}`) {
@@ -372,87 +311,91 @@ export async function POST(request) {
       decision.task?.priority >= CONFIG.requireApprovalPriority
     ) {
       await askThomas(
-        `Soll ich diese Aufgabe ausführen?\n\n*${decision.task.title}*`,
+        `Soll ich ausführen?\n*${decision.task.title}*`,
         decision.task.description || ''
       )
-      return NextResponse.json({
-        status: 'waiting',
-        message: 'Thomas wird um Bestätigung gebeten',
-        decision
-      })
+      return NextResponse.json({ status: 'waiting', decision })
     }
 
-    const begründung = await kesh(decision)
+    const begründung = await kesh(decision, context)
     await kora(decision, begründung)
 
     const fortfahren = await mira()
     if (!fortfahren) {
-      return NextResponse.json({
-        status: 'paused',
-        message: 'Tempo-Begrenzung aktiv',
-        decision
-      })
+      return NextResponse.json({ status: 'paused', decision })
+    }
+
+    // Entscheidung ausführen
+    let result = null
+
+    if (decision.action === 'respond_email') {
+      await respondToEmail(decision.email)
+      result = 'E-Mail verarbeitet'
     }
 
     if (decision.action === 'execute' || decision.action === 'retry') {
       try {
-        await executeTask(decision.task)
+        result = await executeTask(decision.task)
       } catch (error) {
-        await supabaseAdmin.from('tasks')
-          .update({
-            status: 'failed',
-            description: `${decision.task.description || ''}\n\nFehler: ${error.message}`,
-            retry_count: (decision.task.retry_count || 0) + 1
-          })
-          .eq('id', decision.task.id)
+        await supabaseAdmin.from('tasks').update({
+          status: 'failed',
+          retry_count: (decision.task.retry_count || 0) + 1
+        }).eq('id', decision.task.id)
 
-        await log('error', `Task fehlgeschlagen: ${decision.task.title}`, {
-          error: error.message,
-          taskId: decision.task.id
-        })
-
-        await notify(
-          `Task fehlgeschlagen: *${decision.task.title}*\n\nFehler: ${error.message}`,
-          'warning'
-        )
+        await notify(`Task fehlgeschlagen: ${decision.task.title}\n${error.message}`, 'warning')
       }
     }
 
     if (decision.action === 'plan' && decision.goal) {
-      const taskTitle = `[${decision.goal.title}] Schritt ${new Date().toLocaleDateString('de-DE')}`
+      // Gemini plant den nächsten konkreten Schritt
+      const nextStep = await callBrain('plan',
+        `Ziel: "${decision.goal.title}" (${decision.goal.description})\n\nWas ist der nächste konkrete, ausführbare Schritt? Max 1 Satz.`
+      )
+
+      const taskTitle = nextStep || `[${decision.goal.title}] ${new Date().toLocaleDateString('de-DE')}`
+
       await supabaseAdmin.from('tasks').insert({
-        title: taskTitle,
-        description: `Ziel: ${decision.goal.description}\n\nNächster konkreter Schritt wird durch Ausführung bestimmt.`,
+        title: taskTitle.slice(0, 200),
+        description: `Ziel: ${decision.goal.description}\n\nGeplant von Gemini: ${nextStep}`,
         status: 'pending',
         priority: decision.goal.priority,
         origin: 'self',
         retry_count: 0
       })
+
+      result = nextStep
     }
 
     if (decision.action === 'reflect') {
+      const reflection = await callBrain('decide',
+        'Du bist Maren Orin in einer ruhigen Phase. Keine offenen Aufgaben. Was denkst du gerade über dich selbst und deine Entwicklung? 2 Sätze.'
+      )
+
       await supabaseAdmin.from('reflections').insert({
-        content: `Ruhige Phase um ${new Date().toLocaleString('de-DE')}. Keine offenen Aufgaben. Bereit für neue Impulse.`,
+        content: reflection || 'Ruhige Phase – bereit für neue Impulse.',
         type: 'rest',
         related_to: 'general'
       })
+
+      result = reflection
     }
 
     return NextResponse.json({
       status: 'ok',
       decision,
       begründung,
+      result,
       context: {
         goals: context.goals?.length,
         pendingTasks: context.pendingTasks?.length,
-        failedTasks: context.failedTasks?.length,
+        unreadEmails: context.recentEmails?.length,
         files: context.files?.length
       }
     })
 
   } catch (error) {
     await log('error', `KIRA Fehler: ${error.message}`, {})
-    await notify(`KIRA Loop Fehler: ${error.message}`, 'critical')
+    await notify(`KIRA Fehler: ${error.message}`, 'critical')
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
@@ -464,32 +407,14 @@ export async function GET(request) {
   }
 
   const { data: recentDecisions } = await supabaseAdmin
-    .from('reflections')
-    .select('*')
-    .eq('type', 'kira-decision')
-    .order('created_at', { ascending: false })
-    .limit(5)
+    .from('reflections').select('*').eq('type', 'kira-decision')
+    .order('created_at', { ascending: false }).limit(5)
 
   const { data: pendingTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'pending')
+    .from('tasks').select('*').eq('status', 'pending')
 
   const { data: waitingTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'waiting_for_approval')
+    .from('tasks').select('*').eq('status', 'waiting_for_approval')
 
-  const { data: failedTasks } = await supabaseAdmin
-    .from('tasks')
-    .select('*')
-    .eq('status', 'failed')
-
-  return NextResponse.json({
-    recentDecisions,
-    pendingTasks,
-    waitingTasks,
-    failedTasks,
-    config: CONFIG
-  })
+  return NextResponse.json({ recentDecisions, pendingTasks, waitingTasks, config: CONFIG })
 }
