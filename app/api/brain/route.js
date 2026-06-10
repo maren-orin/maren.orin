@@ -18,7 +18,7 @@ export const runtime = 'nodejs'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin, log, notify } from '@/lib/supabase'
 
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 async function think(prompt, context = '') {
   /**
