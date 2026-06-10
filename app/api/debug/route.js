@@ -74,6 +74,24 @@ async function getRepoStructure() {
   return data.tree?.filter(f => f.type === 'blob').map(f => f.path) || []
 }
 
+// Brain Test – Maren denkt
+  if (test === 'brain') {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/brain`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.AGENT_SECRET}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        type: 'decide',
+        task: 'Wer bist du und was sind deine nächsten Ziele? Antworte in 3 Sätzen.'
+      })
+    })
+    const data = await response.json()
+    return NextResponse.json(data)
+  }
+
+
 export async function GET(request) {
   const authHeader = request.headers.get('authorization')
   if (authHeader !== \`Bearer \${process.env.AGENT_SECRET}\`) {
@@ -128,7 +146,7 @@ export async function POST(request) {
   }
 
   return NextResponse.json({
-    available: ['telegram', 'think', 'modify-status', 'modify-test'],
-    usage: '/api/debug?test=think&secret=YOUR_CRON_SECRET'
+    available: ['telegram', 'think', 'modify-status', 'modify-test', 'brain'],
+    usage: '/api/debug?test=brain&secret=YOUR_CRON_SECRET'
   })
 }
